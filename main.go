@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -25,18 +26,24 @@ const (
 	constTokenKey              = "RAHASIA"
 	constAPIKey                = "dev_akey_U1AQQ7Z1PP"
 	constValidationKey         = "dev_vkey_VPT6U7M3HC"
-	constDefaultURLInquiry     = "http://localhost:8081/process-va"
-	constDefaultURLPayment     = "http://localhost:8081/process-va"
-	constDefaultURLCheckStatus = "http://localhost:8081/process-va"
-
+	constDefaultURLInquiry     = "http://localhost:8012/process-va"
+	constDefaultURLPayment     = "http://localhost:8012/process-va"
+	constDefaultURLCheckStatus = "http://localhost:8012/process-va"
 	responseCodeSuccess        = "00"
 	responseCodeFailed         = "01"
-
 	responseTextSuccess        = "Success"
 	responseTextFailed         = "Failed"
-
 	defaultCurrencyCode        = "IDR"
 )
+
+type structMessageSuccess struct {
+    English string `json:"en"`
+    Indonesia string  `json:"id"`
+}
+type structMessageFailed struct {
+    English string `json:"en"`
+    Indonesia string  `json:"id"`
+}
 
 func main() {
 
@@ -61,9 +68,11 @@ func main() {
 	 */
     http.Handle("/bank/va/check-status/", authMiddleware(http.HandlerFunc(checkStatusHandler)))
 
-    if err := http.ListenAndServe(":8013", nil); err != nil {
+	serverPort := os.Getenv("VA_SERVER_PORT");
+	log.Printf("Listen to port "+serverPort)
+    if err := http.ListenAndServe(":"+serverPort, nil); err != nil {
         log.Fatal(err)
-    }
+	}
 }
 
 
@@ -82,15 +91,21 @@ func tokenHandler(w http.ResponseWriter, r *http.Request) {
 	sDec,_ := base64.StdEncoding.DecodeString(base64String)
 	userpass := strings.SplitN(string(sDec), ":", 2)
 
+	bankUsername := os.Getenv("VA_BANK_USERNAME")
+	bankPaswword := os.Getenv("VA_BANK_PASSWORD")
+	tokenLifetime := os.Getenv("VA_TOKEN_LIFETIME")
+
+	lifetime, _ := strconv.Atoi(tokenLifetime)
+
 	username := userpass[0]
 	password := userpass[1]
 
-    if username != "ad7e9a44-76bf-4369-9358-a9c560288217" || password != "041bea89-8a6b-4cd6-bf03-8d407c404d25" {
+    if username != bankUsername || password != bankPaswword {
         w.WriteHeader(http.StatusUnauthorized)
         io.WriteString(w, `{"error":"invalid_credentials"}`)
         return
 	}
-	expire := time.Now().Add(time.Hour * time.Duration(1)).Unix()
+	expire := time.Now().Add(time.Second * time.Duration(lifetime)).Unix()
     // We are happy with the credentials, so build a token. We've given it
     // an expiry of 1 hour.
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -146,7 +161,7 @@ func inquiryHandler(w http.ResponseWriter, r *http.Request) {
 	if len(bankCode) == 0{
 		bankCode = constBankCode
 	}
-	urlInquiry := os.Getenv("VA_URL_INQUIRY")
+	urlInquiry := os.Getenv("VA_URL_JSON_INQUIRY")
 	if len(urlInquiry) == 0{
 		urlInquiry = constDefaultURLInquiry
 	}
@@ -162,7 +177,7 @@ func inquiryHandler(w http.ResponseWriter, r *http.Request) {
     }
 	if err != nil {
 		log.Printf("Error reading body: %v", err)
-		http.Error(w, "can't read body", http.StatusBadRequest)
+		http.Error(w, "Can't read body", http.StatusBadRequest)
 		return
 	}
 	signature1 := createSignature(r.Method, r.RequestURI, token, r.Header.Get("x-bank-timestamp"), string(reqBody))
@@ -201,8 +216,8 @@ func inquiryHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse["data"].(map[string]interface{})["customer_phone"] = ""
 		jsonResponse["data"].(map[string]interface{})["merchant_code"] = ""
 		jsonResponse["data"].(map[string]interface{})["merchant_name"] = ""
-
 		jsonResponse["data"].(map[string]interface{})["bill_list"] = make([]string, 0)
+		jsonResponse["message"] = &structMessageFailed{English: "Failed", Indonesia: "Gagal"}
 
 		// Delete pg_code from client
 		delete(jsonResponse["data"].(map[string]interface{}), "pg_code")
@@ -233,6 +248,7 @@ func inquiryHandler(w http.ResponseWriter, r *http.Request) {
 				jsonResponse["data"].(map[string]interface{})["merchant_code"] = ""
 				jsonResponse["data"].(map[string]interface{})["merchant_name"] = ""		
 				jsonResponse["data"].(map[string]interface{})["bill_list"] = make([]string, 0)
+				jsonResponse["message"] = &structMessageFailed{English: "Failed", Indonesia: "Gagal"}
 				responseCode = responseCodeFailed
 			}
 			if str, ok:= jsonResponse["response_text"].(string); ok{
@@ -266,7 +282,7 @@ func paymentHandler(w http.ResponseWriter, r *http.Request) {
 	if len(bankCode) == 0{
 		bankCode = constBankCode
 	}
-	urlInquiry := os.Getenv("VA_URL_PAYMENT")
+	urlInquiry := os.Getenv("VA_URL_JSON_PAYMENT")
 	if len(urlInquiry) == 0{
 		urlInquiry = constDefaultURLPayment
 	}
@@ -282,7 +298,7 @@ func paymentHandler(w http.ResponseWriter, r *http.Request) {
     }
 	if err != nil {
 		log.Printf("Error reading body: %v", err)
-		http.Error(w, "can't read body", http.StatusBadRequest)
+		http.Error(w, "Can't read body", http.StatusBadRequest)
 		return
 	}
 	signature1 := createSignature(r.Method, r.RequestURI, token, r.Header.Get("x-bank-timestamp"), string(reqBody))
@@ -321,8 +337,9 @@ func paymentHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse["data"].(map[string]interface{})["customer_phone"] = ""
 		jsonResponse["data"].(map[string]interface{})["merchant_code"] = ""
 		jsonResponse["data"].(map[string]interface{})["merchant_name"] = ""
-
-		jsonResponse["data"].(map[string]interface{})["bill_list"] = make([]string, 0)
+		delete(jsonResponse["data"].(map[string]interface{}), "bill_list")
+		delete(jsonResponse["data"].(map[string]interface{}), "detail_bill")
+		jsonResponse["message"] = &structMessageSuccess{English: "Success", Indonesia: "Sukses"}
 
 		// Delete pg_code from client
 		delete(jsonResponse["data"].(map[string]interface{}), "pg_code")
@@ -352,7 +369,9 @@ func paymentHandler(w http.ResponseWriter, r *http.Request) {
 				jsonResponse["data"].(map[string]interface{})["customer_phone"] = ""
 				jsonResponse["data"].(map[string]interface{})["merchant_code"] = ""
 				jsonResponse["data"].(map[string]interface{})["merchant_name"] = ""		
-				jsonResponse["data"].(map[string]interface{})["bill_list"] = make([]string, 0)
+				delete(jsonResponse["data"].(map[string]interface{}), "bill_list")
+				delete(jsonResponse["data"].(map[string]interface{}), "detail_bill")
+				jsonResponse["message"] = &structMessageSuccess{English: "Success", Indonesia: "Sukses"}
 				responseCode = responseCodeSuccess
 			}
 			if str, ok:= jsonResponse["response_text"].(string); ok{
@@ -385,7 +404,7 @@ func checkStatusHandler(w http.ResponseWriter, r *http.Request) {
 	if len(bankCode) == 0{
 		bankCode = constBankCode
 	}
-	urlInquiry := os.Getenv("VA_URL_CHECK_STATUS")
+	urlInquiry := os.Getenv("VA_URL_JSON_CHECK_STATUS")
 	if len(urlInquiry) == 0{
 		urlInquiry = constDefaultURLCheckStatus
 	}
@@ -401,7 +420,7 @@ func checkStatusHandler(w http.ResponseWriter, r *http.Request) {
     }
 	if err != nil {
 		log.Printf("Error reading body: %v", err)
-		http.Error(w, "can't read body", http.StatusBadRequest)
+		http.Error(w, "Can't read body", http.StatusBadRequest)
 		return
 	}
 	signature1 := createSignature(r.Method, r.RequestURI, token, r.Header.Get("x-bank-timestamp"), string(reqBody))
@@ -440,8 +459,9 @@ func checkStatusHandler(w http.ResponseWriter, r *http.Request) {
 		jsonResponse["data"].(map[string]interface{})["customer_phone"] = ""
 		jsonResponse["data"].(map[string]interface{})["merchant_code"] = ""
 		jsonResponse["data"].(map[string]interface{})["merchant_name"] = ""
-
-		jsonResponse["data"].(map[string]interface{})["bill_list"] = make([]string, 0)
+		delete(jsonResponse["data"].(map[string]interface{}), "bill_list")
+		delete(jsonResponse["data"].(map[string]interface{}), "detail_bill")
+		jsonResponse["message"] = &structMessageSuccess{English: "Success", Indonesia: "Sukses"}
 
 		// Delete pg_code from client
 		delete(jsonResponse["data"].(map[string]interface{}), "pg_code")
@@ -471,7 +491,9 @@ func checkStatusHandler(w http.ResponseWriter, r *http.Request) {
 				jsonResponse["data"].(map[string]interface{})["customer_phone"] = ""
 				jsonResponse["data"].(map[string]interface{})["merchant_code"] = ""
 				jsonResponse["data"].(map[string]interface{})["merchant_name"] = ""		
-				jsonResponse["data"].(map[string]interface{})["bill_list"] = make([]string, 0)
+				delete(jsonResponse["data"].(map[string]interface{}), "bill_list")
+				delete(jsonResponse["data"].(map[string]interface{}), "detail_bill")
+				jsonResponse["message"] = &structMessageSuccess{English: "Success", Indonesia: "Sukses"}
 				responseCode = responseCodeSuccess
 			}
 			if str, ok:= jsonResponse["response_text"].(string); ok{
